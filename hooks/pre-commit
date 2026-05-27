@@ -1,0 +1,87 @@
+#!/bin/bash
+# Pre-commit hook for kairo dependency scanning
+# Detects changed dependency files and runs kairo scan on them
+
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+KAIRO_BIN="${REPO_ROOT}/../target/debug/kairo"
+
+# Dependency file patterns
+DEP_PATTERNS="package.json Cargo.toml requirements.txt go.mod *.lock"
+
+# Check if kairo binary exists
+if [[ ! -x "$KAIRO_BIN" ]]; then
+    echo "kairo binary not found at $KAIRO_BIN"
+    echo "Run: cargo build -p kairo-cli"
+    exit 1
+fi
+
+# Get list of changed dependency files
+CHANGED_DEPS=""
+for pattern in $DEP_PATTERNS; do
+    if [[ "$pattern" == *.lock ]]; then
+        # Handle *.lock specially - only match files in repo root
+        changed_files=$(git diff --cached --name-only --diff-filter=ACM | grep -E "^[^/]+\.lock$" || true)
+    else
+        changed_files=$(git diff --cached --name-only --diff-filter=ACM | grep -E "^${pattern}$" || true)
+    fi
+    if [[ -n "$changed_files" ]]; then
+        CHANGED_DEPS="${CHANGED_DEPS}${changed_files}"$'\n'
+    fi
+done
+
+# Remove trailing newline
+CHANGED_DEPS="${CHANGED_DEPS%$'\n'}"
+
+if [[ -z "$CHANGED_DEPS" ]]; then
+    echo "No dependency files changed, skipping kairo scan"
+    exit 0
+fi
+
+echo "Running kairo scan on changed dependency files..."
+echo ""
+
+BLOCK_COUNT=0
+WARN_COUNT=0
+
+while IFS= read -r dep_file; do
+    if [[ -z "$dep_file" ]]; then
+        continue
+    fi
+
+    full_path="${REPO_ROOT}/${dep_file}"
+
+    if [[ ! -f "$full_path" ]]; then
+        continue
+    fi
+
+    echo "Scanning: $dep_file"
+    result=$("$KAIRO_BIN" scan "$full_path" 2>&1) || true
+
+    # Parse verdict counts from output
+    blocks=$(echo "$result" | grep -c "VERDICT: BLOCK" || true)
+    warns=$(echo "$result" | grep -c "VERDICT: WARN" || true)
+
+    BLOCK_COUNT=$((BLOCK_COUNT + blocks))
+    WARN_COUNT=$((WARN_COUNT + warns))
+
+    if [[ $blocks -gt 0 ]]; then
+        echo "$result"
+        echo ""
+    fi
+done <<< "$CHANGED_DEPS"
+
+echo ""
+echo "Summary: $BLOCK_COUNT BLOCK, $WARN_COUNT WARN"
+
+if [[ $BLOCK_COUNT -gt 0 ]]; then
+    echo "Commit blocked due to BLOCK verdicts"
+    exit 1
+fi
+
+if [[ $WARN_COUNT -gt 0 ]]; then
+    echo "Commit allowed with WARN verdicts"
+fi
+
+exit 0

@@ -1,0 +1,28 @@
+name: "Kairo Check"
+description: "Check AI agent actions for security and freshness risks"
+author: "Kairo"
+inputs:
+  policy:
+    description: "Policy level: strict, moderate, or permissive"
+    required: false
+    default: "moderate"
+  github-token:
+    description: "GitHub token for posting comments and status checks"
+    required: true
+    default: ${{ github.token }}
+  api-url:
+    description: "Kairo Decision Server URL"
+    required: false
+    default: "http://127.0.0.1:8080"
+  fail-on:
+    description: "Fail on: block, warn, or allow"
+    required: false
+    default: "block"
+runs:
+  using: "docker"
+  image: "Dockerfile"
+  args:
+    - ${{ inputs.policy }}
+    - ${{ inputs.github-token }}
+    - ${{ inputs.api-url }}
+    - ${{ inputs.fail-on }}
